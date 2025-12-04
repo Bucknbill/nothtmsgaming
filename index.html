@@ -1,4 +1,3 @@
-
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -75,18 +74,62 @@
   }
 
   .progress-container {
-    width: 240px;
-    height: 6px;
-    background: rgba(255,255,255,0.04);
-    border-radius: 6px;
-    overflow: hidden;
-    margin-top: 12px;
-  }
-  .progress-bar {
-    width: 0%;
-    height: 100%;
-    background: linear-gradient(90deg, var(--accent), rgba(255,255,255,0.12));
-    transition: width 220ms ease;
+    try{
+      // Prefer configured provider + key (stored in localStorage) for reliability.
+      const provider = localStorage.getItem('htms_ai_provider') || '';
+      const apiKey = localStorage.getItem('htms_ai_key') || '';
+      let response;
+
+      if(provider === 'groq' && apiKey){
+        response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + apiKey },
+          body: JSON.stringify({ model: 'mixtral-8x7b-32768', messages:[{role:'user', content:text}], max_tokens:1024, temperature:0.7 })
+        });
+      } else if(provider === 'huggingface' && apiKey){
+        response = await fetch('https://api-inference.huggingface.co/models/gpt2', {
+          method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + apiKey }, body: JSON.stringify({ inputs: text })
+        });
+      } else {
+        // fallback to OctoAI (no-auth) if no provider configured
+        response = await fetch('https://text.octoai.run/v1/chat/completions', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ model: 'llama-2-13b-chat', messages:[{role:'user', content:text}], max_tokens:1024, temperature:0.7 })
+        });
+      }
+
+      if(!response.ok){
+        // try to extract error message
+        let errText = null;
+        try{ errText = await response.text(); }catch(e){}
+        throw new Error(errText || `API error: ${response.status}`);
+      }
+
+      const data = await response.json();
+      let reply = '';
+
+      // multiple response shapes handled
+      if(provider === 'huggingface' && data.generated_text) reply = data.generated_text;
+      else if(Array.isArray(data) && data[0]?.generated_text) reply = data[0].generated_text;
+      else if(data.choices?.[0]?.message?.content) reply = data.choices[0].message.content;
+      else if(data.output?.choices?.[0]?.message?.content) reply = data.output.choices[0].message.content;
+      else reply = JSON.stringify(data).slice(0,2000);
+
+      reply = (reply || 'No response received.').toString().substring(0,2000);
+
+      chatMessages.removeChild(loadingBubble);
+      chatHistory.push({ role:'assistant', content:reply, image: null });
+      renderMessages();
+      saveChatHistory();
+    }catch(err){
+      console.error('Chat error:', err);
+      try{ chatMessages.removeChild(loadingBubble); }catch(e){}
+
+      // Use a local fallback responder so the UI remains useful when remote APIs fail.
+      const fallbackReply = localFallback(text);
+      chatHistory.push({ role:'assistant', content:fallbackReply, image: null });
+      renderMessages();
+      saveChatHistory();
+    }
   }
 
   /* --- GALAXY BACKGROUND --- */
@@ -103,50 +146,6 @@
     border-radius: 50%;
     opacity: 0.7;
     animation: twinkle 5s infinite alternate;
-  }
-
-  /* Extra particle types: snow, rain, hearts, leaves */
-  .snow, .leaf {
-    position: absolute;
-    color: white;
-    width: 8px;
-    height: 8px;
-    border-radius: 50%;
-    background: white;
-    opacity: 0.9;
-    transform: translateY(-10vh);
-    animation: fallSnow linear infinite;
-  }
-  .leaf { background: rgba(80,180,100,0.95); width:10px; height:6px; border-radius:4px; }
-
-  .raindrop {
-    position: absolute;
-    width: 2px;
-    height: 12px;
-    background: rgba(120,200,255,0.95);
-    border-radius: 2px;
-    opacity: 0.9;
-    transform: translateY(-20vh);
-    animation: fallRain linear infinite;
-  }
-
-  .particle-heart {
-    position: absolute;
-    font-size: 12px;
-    line-height: 12px;
-    color: rgba(255,100,140,0.95);
-    transform: translateY(-8vh) scale(0.9);
-    animation: fallSnow linear infinite;
-    pointer-events: none;
-  }
-
-  @keyframes fallSnow {
-    0% { transform: translateY(-10vh) rotate(0deg); opacity: 0.95; }
-    100% { transform: translateY(120vh) rotate(180deg); opacity: 0.6; }
-  }
-  @keyframes fallRain {
-    0% { transform: translateY(-20vh); opacity: 0.9; }
-    100% { transform: translateY(120vh); opacity: 0.6; }
   }
 
   .nebula {
@@ -739,7 +738,7 @@
 
   <!-- SETTINGS -->
   <div class="content" id="settingsTab">
-    <h1>⚙️Settings⚙️</h1>
+    <h1>⚙️ Holiday Settings 🎄</h1>
     <div class="settings-layout">
       <div class="settings-sidebar" role="tablist" aria-label="Settings Tabs">
         <button class="settings-tab-btn active" data-panel="general" role="tab" aria-selected="true"><span class="settings-icon">⚙️</span> <span style="margin-left:6px;">General</span></button>
@@ -811,7 +810,6 @@
 
 <!-- Panic Key Display -->
 <div id="panicKeyDisplay"></div>
- 
 
   <script>
 /* ---------------- LOADER ---------------- */
@@ -819,71 +817,20 @@ const loader = document.getElementById("loader");
 const progressBar = document.getElementById("progressBar");
 const mainSite = document.getElementById("mainSite");
 const loaderStars = document.getElementById("loaderStars");
-// Theme -> default particle type mapping
-const themeParticleDefaults = {
-  winter: 'snow',
-  christmas: 'snow',
-  ocean: 'rain',
-  default: 'stars',
-  galaxy: 'stars',
-  neon: 'stars',
-  cozy: 'stars',
-  sunset: 'stars',
-  forest: 'leaves',
-  retro: 'stars',
-  aurora: 'stars',
-  matrix: 'rain'
-};
-
-function getSavedThemeName(){
-  try{ return localStorage.getItem('htms_theme') || 'default'; }catch(e){ return 'default'; }
-}
-
-function getParticleTypeForTheme(theme){
-  try{
-    const map = JSON.parse(localStorage.getItem('htms_theme_particles')||'{}');
-    if(map && map[theme]) return map[theme];
-  }catch(e){}
-  return themeParticleDefaults[theme] || 'stars';
-}
-
-// create loader particles (controlled by effects setting). Accepts count and optional type.
-function createLoaderStars(count, type){
+// create loader stars (controlled by effects setting)
+function createLoaderStars(count){
   if(!loaderStars) return;
   loaderStars.innerHTML = '';
-  const theme = getSavedThemeName();
-  const particleType = type || getParticleTypeForTheme(theme) || 'stars';
   for (let i = 0; i < count; i++) {
-    let el;
-    if(particleType === 'snow' || particleType === 'leaves'){
-      el = document.createElement('div');
-      el.className = particleType === 'snow' ? 'snow' : 'leaf';
-      const size = (Math.random()*6 + 4) + 'px';
-      el.style.width = size;
-      el.style.height = particleType === 'leaf' ? (parseInt(size,10)*0.6+'px') : size;
-    } else if(particleType === 'rain'){
-      el = document.createElement('div');
-      el.className = 'raindrop';
-      const h = (Math.random()*10 + 8) + 'px';
-      el.style.height = h;
-      el.style.width = (Math.random()*2 + 1) + 'px';
-    } else if(particleType === 'hearts'){
-      el = document.createElement('div');
-      el.className = 'particle-heart';
-      el.textContent = '♥';
-    } else {
-      el = document.createElement('div');
-      el.className = 'star';
-      const size = Math.random() * 2 + 'px';
-      el.style.width = size;
-      el.style.height = size;
-    }
-
-    el.style.top = Math.random() * 100 + '%';
-    el.style.left = Math.random() * 100 + '%';
-    el.style.animationDuration = (Math.random() * 6 + 4) + 's';
-    el.style.animationDelay = Math.random() * 4 + 's';
-    loaderStars.appendChild(el);
+    const star = document.createElement("div");
+    star.className = "loader-star";
+    const size = Math.random() * 2 + "px";
+    star.style.width = size;
+    star.style.height = size;
+    star.style.top = Math.random() * 100 + "%";
+    star.style.left = Math.random() * 100 + "%";
+    star.style.animationDelay = Math.random() * 4 + "s";
+    loaderStars.appendChild(star);
   }
 }
 
@@ -1252,53 +1199,20 @@ document.addEventListener("keyup", (e) => {
 
 /* ---------------- STARFIELD ---------------- */
 const starfield = document.getElementById("starfield");
-function createStarfield(count, type){
+function createStarfield(count){
   if(!starfield) return;
   starfield.innerHTML = '';
-  const theme = getSavedThemeName();
-  const particleType = type || getParticleTypeForTheme(theme) || 'stars';
   for(let i=0;i<count;i++){
-    let el;
-    if(particleType === 'snow' || particleType === 'leaves'){
-      el = document.createElement('div');
-      el.className = particleType === 'snow' ? 'snow' : 'leaf';
-      const size = (Math.random()*8 + 4) + 'px';
-      el.style.width = size;
-      el.style.height = particleType === 'leaf' ? (parseInt(size,10)*0.6 + 'px') : size;
-    } else if(particleType === 'rain'){
-      el = document.createElement('div');
-      el.className = 'raindrop';
-      el.style.height = (Math.random()*14 + 8) + 'px';
-      el.style.width = (Math.random()*2 + 1) + 'px';
-    } else if(particleType === 'hearts'){
-      el = document.createElement('div');
-      el.className = 'particle-heart';
-      el.textContent = '♥';
-    } else {
-      el = document.createElement('div');
-      el.className = 'star';
-      const size = Math.random()*2 + 1 + 'px';
-      el.style.width = size;
-      el.style.height = size;
-      el.style.opacity = Math.random();
-    }
-
-    el.style.top = Math.random() * 100 + '%';
-    el.style.left = Math.random() * 100 + '%';
-    // vary animation speed a bit
-    el.style.animationDuration = (Math.random() * 10 + 6) + 's';
-    el.style.animationDelay = Math.random() * 6 + 's';
-    starfield.appendChild(el);
+    const star = document.createElement("div");
+    star.className="star";
+    const size = Math.random()*2 +1+"px";
+    star.style.width = size;
+    star.style.height = size;
+    star.style.top = Math.random()*100+"%";
+    star.style.left = Math.random()*100+"%";
+    star.style.opacity = Math.random();
+    starfield.appendChild(star);
   }
-}
-
-// Update particle display for a theme (applies both loader + main starfield)
-function updateParticlesForTheme(themeName){
-  const cnt = parseInt(localStorage.getItem('htms_particle_count')||'300',10) || 300;
-  const loaderCount = Math.min(120, Math.max(0, Math.round(cnt/3)));
-  const type = getParticleTypeForTheme(themeName || getSavedThemeName());
-  createLoaderStars(loaderCount, type);
-  createStarfield(cnt, type);
 }
 
 /* ---------------- MINECRAFT MODAL ---------------- */
@@ -1323,62 +1237,28 @@ if(themesPanel){
   customWrap.style.marginTop = '14px';
   customWrap.innerHTML = `
     <h3 style="margin:6px 0;">Custom Background</h3>
-    <div style="display:flex; gap:12px; flex-wrap:wrap; align-items:flex-start;">
-      <div style="flex:1; min-width:240px;">
-        <div style="display:flex; gap:8px; align-items:center; margin-bottom:8px;">
-          <div style="font-weight:700; width:64px;">Gradient</div>
-          <div style="display:flex; gap:8px; align-items:center;">
-            <label style="font-size:0.85rem;">Start</label>
-            <input type="color" id="customBgStart" title="Gradient start color" />
-            <label style="font-size:0.85rem;">End</label>
-            <input type="color" id="customBgEnd" title="Gradient end color" />
-          </div>
-        </div>
-
-        <div style="display:flex; gap:8px; align-items:center; margin-bottom:8px;">
-          <div style="font-weight:700; width:64px;">Nebula</div>
-          <div style="display:flex; gap:8px; align-items:center;">
-            <label style="font-size:0.85rem;">1</label>
-            <input type="color" id="customNeb1" title="Nebula color 1" />
-            <label style="font-size:0.85rem;">2</label>
-            <input type="color" id="customNeb2" title="Nebula color 2" />
-            <label style="font-size:0.85rem;">3</label>
-            <input type="color" id="customNeb3" title="Nebula color 3" />
-          </div>
-        </div>
-
-        <div style="display:flex; gap:8px; align-items:center; margin-bottom:8px;">
-          <div style="font-weight:700; width:64px;">Particles</div>
-          <div style="display:flex; gap:8px; align-items:center; width:100%;">
-            <input id="particleCount" type="range" min="0" max="600" step="10" style="flex:1;" />
-            <span id="particleCountLabel" style="min-width:44px; text-align:right; font-weight:700;"></span>
-          </div>
-        </div>
-
-        <div style="display:flex; gap:8px; align-items:center; margin-bottom:6px;">
-          <div style="font-weight:700; width:64px;">Style</div>
-          <select id="particleTypeSelect" style="padding:6px 8px; border-radius:8px; background:rgba(0,0,0,0.12); color:var(--text);">
-            <option value="stars">Stars</option>
-            <option value="snow">Snow</option>
-            <option value="rain">Rain</option>
-            <option value="leaves">Leaves</option>
-            <option value="hearts">Hearts</option>
-          </select>
-          <span style="opacity:0.8; font-size:12px; margin-left:6px;">Per-theme override saved automatically</span>
-        </div>
-
-        <div style="display:flex; gap:8px; align-items:center; margin-top:8px;">
-          <button id="effectsToggle" class="theme-btn" style="padding:8px 12px;">Effects: <span id="effectsLabel">Enabled</span></button>
-          <button id="applyCustomBtn" class="theme-btn" style="padding:8px 12px;">Apply</button>
-          <button id="resetCustomBtn" class="theme-btn" style="padding:8px 12px; background:transparent; border:1px solid rgba(255,255,255,0.06);">Reset</button>
-        </div>
-      </div>
-
-      <div style="width:220px;">
-        <div style="font-weight:700; margin-bottom:8px;">Preview</div>
-        <div id="bgPreview" style="width:220px; height:140px; border-radius:10px; border:1px solid rgba(255,255,255,0.04); overflow:hidden; position:relative;"></div>
-        <div style="font-size:12px; opacity:0.85; margin-top:6px;">Tip: change colors to see preview. Click Apply to save.</div>
-      </div>
+    <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center;">
+      <label style="font-weight:700; font-size:0.9rem;">Start</label>
+      <input type="color" id="customBgStart" />
+      <label style="font-weight:700; font-size:0.9rem;">End</label>
+      <input type="color" id="customBgEnd" />
+    </div>
+    <div style="display:flex; gap:8px; align-items:center; margin-top:8px;">
+      <label style="font-weight:700;">Nebula 1</label>
+      <input type="color" id="customNeb1" />
+      <label style="font-weight:700;">Nebula 2</label>
+      <input type="color" id="customNeb2" />
+      <label style="font-weight:700;">Nebula 3</label>
+      <input type="color" id="customNeb3" />
+    </div>
+    <div style="display:flex; gap:8px; align-items:center; margin-top:10px;">
+      <label style="font-weight:700;">Particles</label>
+      <input id="particleCount" type="range" min="0" max="600" step="10" />
+      <span id="particleCountLabel" style="min-width:36px; text-align:right;"></span>
+    </div>
+    <div style="display:flex; gap:8px; align-items:center; margin-top:10px;">
+      <button id="effectsToggle" class="theme-btn" style="padding:8px 12px;">Effects: <span id="effectsLabel">Enabled</span></button>
+      <button id="applyCustomBtn" class="theme-btn" style="padding:8px 12px;">Apply Custom</button>
     </div>
   `;
   themesPanel.appendChild(customWrap);
@@ -1389,7 +1269,6 @@ if(themesPanel){
   const customNeb1 = document.getElementById('customNeb1');
   const customNeb2 = document.getElementById('customNeb2');
   const customNeb3 = document.getElementById('customNeb3');
-  const particleTypeSelect = document.getElementById('particleTypeSelect');
   const particleCount = document.getElementById('particleCount');
   const particleCountLabel = document.getElementById('particleCountLabel');
   const effectsToggle = document.getElementById('effectsToggle');
@@ -1412,59 +1291,9 @@ if(themesPanel){
     customNeb3.value = obj.neb3 || defaults.neb3;
     particleCount.value = obj.particleCount || defaults.particleCount;
     particleCountLabel.textContent = particleCount.value;
-    try{
-      const currentTheme = (localStorage.getItem('htms_theme') || 'default');
-      const savedMap = JSON.parse(localStorage.getItem('htms_theme_particles')||'{}');
-      const curType = savedMap[currentTheme] || getParticleTypeForTheme(currentTheme) || 'stars';
-      if(particleTypeSelect) particleTypeSelect.value = curType;
-    }catch(e){}
   }
 
   setControlValues(Object.assign({}, defaults, savedCustom || {}, { particleCount: savedParticleCount }));
-
-  // live preview and improved controls
-  const bgPreview = document.getElementById('bgPreview');
-  const resetCustomBtn = document.getElementById('resetCustomBtn');
-
-  function updatePreview(){
-    try{
-      const start = customBgStart.value || defaults.bgStart;
-      const end = customBgEnd.value || defaults.bgEnd;
-      const neb1 = hexToRgba(customNeb1.value || defaults.neb1, 0.12);
-      const neb2 = hexToRgba(customNeb2.value || defaults.neb2, 0.08);
-      const neb3 = hexToRgba(customNeb3.value || defaults.neb3, 0.06);
-      if(bgPreview){
-        bgPreview.style.background = `radial-gradient(circle at bottom, ${start}, ${end} 90%)`;
-        // overlay simple nebulas as gradients
-        bgPreview.innerHTML = `<div style="position:absolute; inset:0; background: radial-gradient(circle at 30% 30%, ${neb1}, transparent 40%), radial-gradient(circle at 70% 70%, ${neb2}, transparent 40%), radial-gradient(circle at 20% 70%, ${neb3}, transparent 40%); filter: blur(36px);"></div>`;
-      }
-      particleCountLabel.textContent = particleCount.value;
-    }catch(e){ console.error('preview error', e); }
-  }
-
-  // wire live preview updates
-  [customBgStart, customBgEnd, customNeb1, customNeb2, customNeb3].forEach(inp => { if(inp) inp.addEventListener('input', updatePreview); });
-  if(particleCount) particleCount.addEventListener('input', ()=> { particleCountLabel.textContent = particleCount.value; });
-
-  // Apply button: save and apply without alert (brief subtle feedback)
-  applyCustomBtn.addEventListener('click', ()=>{
-    applyCustomBackground();
-    try{ applyCustomBtn.textContent = 'Saved ✓'; setTimeout(()=> applyCustomBtn.textContent = 'Apply', 1200); }catch(e){}
-  });
-
-  // Reset button: restore defaults (does not clear per-theme mapping)
-  resetCustomBtn.addEventListener('click', ()=>{
-    setControlValues(defaults);
-    updatePreview();
-    applyCustomBackground();
-    try{ resetCustomBtn.textContent = 'Reset ✓'; setTimeout(()=> resetCustomBtn.textContent = 'Reset', 1200); }catch(e){}
-  });
-
-  // Particle style selection already wired earlier; ensure preview updates when changed
-  if(particleTypeSelect) particleTypeSelect.addEventListener('change', ()=>{ try{ const themeName = localStorage.getItem('htms_theme') || 'default'; const map = JSON.parse(localStorage.getItem('htms_theme_particles')||'{}'); map[themeName] = particleTypeSelect.value; localStorage.setItem('htms_theme_particles', JSON.stringify(map)); updateParticlesForTheme(themeName); }catch(e){} });
-
-  // initialize preview and labels
-  updatePreview();
 
   function applyCustomBackground(){
     const s = document.documentElement.style;
@@ -1477,19 +1306,6 @@ if(themesPanel){
     localStorage.setItem('htms_custom_bg', JSON.stringify({ bgStart:customBgStart.value, bgEnd:customBgEnd.value, neb1:customNeb1.value, neb2:customNeb2.value, neb3:customNeb3.value }));
     localStorage.setItem('htms_particle_count', String(particleCount.value));
     createStarfield(parseInt(particleCount.value,10)||0);
-  }
-
-  // per-theme particle selector change -> save mapping and update particles immediately
-  if(particleTypeSelect){
-    particleTypeSelect.addEventListener('change', ()=>{
-      try{
-        const themeName = localStorage.getItem('htms_theme') || 'default';
-        const map = JSON.parse(localStorage.getItem('htms_theme_particles')||'{}');
-        map[themeName] = particleTypeSelect.value;
-        localStorage.setItem('htms_theme_particles', JSON.stringify(map));
-        updateParticlesForTheme(themeName);
-      }catch(e){ console.error(e); }
-    });
   }
 
   function hexToRgba(hex, alpha){
@@ -1647,9 +1463,6 @@ gameIframe.addEventListener("click", () => {
   try { gameIframe.contentWindow.focus(); } catch (err) {}
 });
 
-/* ---------------- DIAGNOSTICS (capture runtime errors) ---------------- */
-/* diagnostics removed */
-
 /* ---------------- SEARCH + THEME SWITCHER ---------------- */
 // Search/filter games
 const searchInput = document.getElementById('gameSearch');
@@ -1715,8 +1528,6 @@ function applyTheme(name){
     document.querySelectorAll('.theme-dropdown-item').forEach(it => it.classList.toggle('active', it.dataset.theme === name));
     if(currentThemeLabel) currentThemeLabel.textContent = (name || 'default').replace(/-/g,' ').replace(/\b\w/g, c=>c.toUpperCase());
     try{ localStorage.setItem('htms_theme', name); }catch(e){}
-    // update particles for the newly applied theme
-    try{ updateParticlesForTheme(name); }catch(e){ /* ignore */ }
     // small delay to allow CSS to reflow, then remove fade to fade back in
     setTimeout(()=> doc.classList.remove('theme-fade'), 40);
   }, 140);
@@ -1798,43 +1609,5 @@ function openInAboutBlank(url) {
 }
 </script>
 
-<!-- Code injected by live-server -->
-<script>
-	// <![CDATA[  <-- For SVG support
-	if ('WebSocket' in window) {
-		(function () {
-			function refreshCSS() {
-				var sheets = [].slice.call(document.getElementsByTagName("link"));
-				var head = document.getElementsByTagName("head")[0];
-				for (var i = 0; i < sheets.length; ++i) {
-					var elem = sheets[i];
-					var parent = elem.parentElement || head;
-					parent.removeChild(elem);
-					var rel = elem.rel;
-					if (elem.href && typeof rel != "string" || rel.length == 0 || rel.toLowerCase() == "stylesheet") {
-						var url = elem.href.replace(/(&|\?)_cacheOverride=\d+/, '');
-						elem.href = url + (url.indexOf('?') >= 0 ? '&' : '?') + '_cacheOverride=' + (new Date().valueOf());
-					}
-					parent.appendChild(elem);
-				}
-			}
-			var protocol = window.location.protocol === 'http:' ? 'ws://' : 'wss://';
-			var address = protocol + window.location.host + window.location.pathname + '/ws';
-			var socket = new WebSocket(address);
-			socket.onmessage = function (msg) {
-				if (msg.data == 'reload') window.location.reload();
-				else if (msg.data == 'refreshcss') refreshCSS();
-			};
-			if (sessionStorage && !sessionStorage.getItem('IsThisFirstTime_Log_From_LiveServer')) {
-				console.log('Live reload enabled.');
-				sessionStorage.setItem('IsThisFirstTime_Log_From_LiveServer', true);
-			}
-		})();
-	}
-	else {
-		console.error('Upgrade your browser. This Browser is NOT supported WebSocket for Live-Reloading.');
-	}
-	// ]]>
-</script>
 </body>
 </html>
